@@ -253,16 +253,21 @@
       <button onclick="clearFile()" title="Remove">✕</button>
     </div>
 
-    <!-- Output folder -->
-    <div class="field">
-      <label for="folder-input">Save converted file to folder (local path on this machine)</label>
+    <!-- Output folder (local mode only) -->
+    {% if not is_remote %}
+    <div class="field" id="folder-field">
+      <label for="folder-input">Save to local folder on this machine</label>
       <div class="input-row">
         <input type="text" id="folder-input" placeholder="e.g. C:\Users\ratna\Documents\Converted" />
       </div>
       <small style="color:var(--muted);font-size:0.78rem;display:block;margin-top:4px;">
-        Leave empty to download directly to your browser's Downloads folder.
+        Leave empty to download to your browser's Downloads folder instead.
       </small>
     </div>
+    {% else %}
+    <!-- Remote: no folder input, always download -->
+    <input type="hidden" id="folder-input" value="" />
+    {% endif %}
 
     <!-- OCR language -->
     <div class="field">

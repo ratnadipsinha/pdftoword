@@ -1,7 +1,7 @@
 """
 PDF2Word Pro — Flask Web App
-Run:  python app.py
-Open: http://localhost:5000
+Run locally:  python app.py  →  http://localhost:5000
+Deployed:     auto-served via gunicorn on Render / Railway / any PaaS
 """
 
 import os
@@ -18,6 +18,9 @@ from src.converter import PDF2WordConverter
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100 MB upload limit
+
+# True when deployed to a remote server (set via env var in render.yaml)
+IS_REMOTE = os.environ.get("IS_REMOTE", "false").lower() == "true"
 
 # Temp working directories (auto-cleaned after download)
 UPLOAD_DIR = Path("_uploads")
@@ -40,7 +43,7 @@ def allowed_file(filename: str) -> bool:
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", is_remote=IS_REMOTE)
 
 
 @app.route("/convert", methods=["POST"])
@@ -142,8 +145,12 @@ def save_to_folder():
     """
     Save converted file to a local folder path on this machine.
     Body JSON: { job_id, folder_path }
-    (Only useful when running locally — server and browser are same machine.)
+    Only works when server and browser are on the same machine (local run).
+    Returns 403 when IS_REMOTE is True.
     """
+    if IS_REMOTE:
+        return jsonify(error="Folder save is only available when running locally."), 403
+
     data = request.get_json(force=True)
     job_id = data.get("job_id", "")
     folder_path = data.get("folder_path", "").strip()
@@ -233,6 +240,7 @@ threading.Thread(target=_periodic_cleanup, daemon=True).start()
 # ── Entry point ──────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
     print("\n PDF2Word Pro")
-    print(" Open in browser → http://localhost:5000\n")
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    print(f" Open in browser → http://localhost:{port}\n")
+    app.run(host="0.0.0.0", port=port, debug=False)

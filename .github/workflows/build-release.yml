@@ -1,14 +1,14 @@
-name: Test & Validate PDF2Word Pro
+name: CI — Test & Deploy PDF2Word Pro
 
-# Runs on every push and pull request to ensure the app starts correctly.
 on:
   push:
     branches: ["master", "main"]
   pull_request:
 
 jobs:
+  # ── 1. Run tests on every push / PR ───────────────────────────────────
   test:
-    name: Validate on ${{ matrix.os }}
+    name: Test on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -39,12 +39,47 @@ jobs:
           print('All imports OK')
           "
 
-      - name: Smoke-test Flask starts
+      - name: Smoke-test Flask routes
         run: |
           python -c "
           from app import app
           client = app.test_client()
+
+          # Homepage
           res = client.get('/')
-          assert res.status_code == 200, f'Expected 200, got {res.status_code}'
-          print('Flask OK — homepage returned 200')
+          assert res.status_code == 200, f'/ returned {res.status_code}'
+
+          # Status for unknown job returns 404
+          res = client.get('/status/doesnotexist')
+          assert res.status_code == 404
+
+          print('All route tests passed')
+          "
+
+  # ── 2. Trigger Render deploy after tests pass (master branch only) ─────
+  deploy:
+    name: Deploy to Render
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+
+    steps:
+      - name: Trigger Render deploy hook
+        # Set RENDER_DEPLOY_HOOK in GitHub repo → Settings → Secrets → Actions
+        # Get the URL from: Render dashboard → your service → Settings → Deploy Hook
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK" ]; then
+            echo "RENDER_DEPLOY_HOOK secret not set — skipping auto-deploy."
+            echo "Add it in: GitHub repo → Settings → Secrets and variables → Actions"
+            exit 0
+          fi
+          curl -sf -X POST "$RENDER_DEPLOY_HOOK" \
+            -H "Accept: application/json" \
+            -o response.json
+          python3 -c "
+          import json
+          data = json.load(open('response.json'))
+          print('Deploy triggered — ID:', data.get('id', 'ok'))
           "
