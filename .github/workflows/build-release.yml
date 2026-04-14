@@ -1,100 +1,50 @@
-name: Build & Release PDF2Word Pro
+name: Test & Validate PDF2Word Pro
 
-# Triggers:
-#   - Push a git tag like v1.0.0  →  builds .exe and creates a GitHub Release
-#   - Manual trigger from GitHub Actions tab
+# Runs on every push and pull request to ensure the app starts correctly.
 on:
   push:
-    tags:
-      - "v*.*.*"
-  workflow_dispatch:
-
-permissions:
-  contents: write   # needed to create GitHub Releases
+    branches: ["master", "main"]
+  pull_request:
 
 jobs:
-  build-windows:
-    name: Build Windows .exe
-    runs-on: windows-latest
+  test:
+    name: Validate on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
 
     steps:
-      # ── 1. Checkout ────────────────────────────────────────────────
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # ── 2. Python setup ────────────────────────────────────────────
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      # ── 3. Install dependencies ────────────────────────────────────
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller
 
-      # ── 4. Install Tesseract OCR (for scanned PDF support) ─────────
-      - name: Install Tesseract OCR
+      - name: Verify imports
         run: |
-          choco install tesseract --yes --no-progress
-          echo "C:\Program Files\Tesseract-OCR" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-        shell: powershell
+          python -c "
+          from src.analyzer import PDFAnalyzer
+          from src.builder import WordBuilder
+          from src.converter import PDF2WordConverter
+          from app import app
+          print('All imports OK')
+          "
 
-      # ── 5. Build .exe with PyInstaller ─────────────────────────────
-      - name: Build executable
+      - name: Smoke-test Flask starts
         run: |
-          pyinstaller pdf2word.spec --clean --noconfirm
-        shell: bash
-
-      # ── 6. Rename output ───────────────────────────────────────────
-      - name: Rename output
-        run: |
-          $tag = "${{ github.ref_name }}"
-          if (-not $tag) { $tag = "dev" }
-          Copy-Item "dist/PDF2Word Pro.exe" "dist/PDF2Word-Pro-$tag-Windows.exe"
-        shell: powershell
-
-      # ── 7. Upload build artifact (always available for download) ───
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: PDF2Word-Pro-Windows
-          path: "dist/PDF2Word-Pro-*.exe"
-          retention-days: 30
-
-      # ── 8. Create GitHub Release (only on tag push) ────────────────
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          name: "PDF2Word Pro ${{ github.ref_name }}"
-          body: |
-            ## PDF2Word Pro ${{ github.ref_name }}
-
-            ### Download
-            Download the **Windows installer** below — no Python needed, just double-click to run.
-
-            ### What's included
-            - High-fidelity PDF → Word conversion
-            - Tables, images, fonts, colors preserved
-            - OCR support for scanned PDFs (Tesseract bundled)
-            - Drag-and-drop desktop GUI
-            - Batch folder conversion
-
-            ### How to use
-            1. Download `PDF2Word-Pro-${{ github.ref_name }}-Windows.exe`
-            2. Double-click to launch
-            3. Drag PDFs onto the app and click **Convert to Word**
-
-            ### CLI usage
-            ```
-            "PDF2Word Pro.exe" input.pdf output.docx
-            "PDF2Word Pro.exe" --batch ./pdfs/ ./output/
-            ```
-          draft: false
-          prerelease: false
-          files: "dist/PDF2Word-Pro-*.exe"
-          token: ${{ secrets.GITHUB_TOKEN }}
+          python -c "
+          from app import app
+          client = app.test_client()
+          res = client.get('/')
+          assert res.status_code == 200, f'Expected 200, got {res.status_code}'
+          print('Flask OK — homepage returned 200')
+          "

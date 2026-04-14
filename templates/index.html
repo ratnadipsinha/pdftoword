@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDF2Word Pro</title>
+  <style>
+    /* ── Reset & base ─────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0f1117;
+      --surface:   #1a1d27;
+      --card:      #21243a;
+      --border:    #2e3250;
+      --accent:    #6c63ff;
+      --accent-lt: #a89cf7;
+      --text:      #e2e8f0;
+      --muted:     #64748b;
+      --success:   #4ade80;
+      --error:     #f87171;
+      --radius:    12px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 16px 60px;
+    }
+
+    /* ── Header ───────────────────────────────────────── */
+    header {
+      text-align: center;
+      margin-bottom: 36px;
+    }
+    header h1 {
+      font-size: 2.2rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent-lt), var(--accent));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    header p {
+      color: var(--muted);
+      margin-top: 6px;
+      font-size: 0.95rem;
+    }
+
+    /* ── Card ─────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 32px;
+      width: 100%;
+      max-width: 600px;
+    }
+
+    /* ── Drop zone ────────────────────────────────────── */
+    #drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 48px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+      position: relative;
+    }
+    #drop-zone:hover,
+    #drop-zone.dragover {
+      border-color: var(--accent);
+      background: rgba(108, 99, 255, 0.06);
+    }
+    #drop-zone svg {
+      width: 48px; height: 48px;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+    #drop-zone p { color: var(--muted); font-size: 0.95rem; line-height: 1.6; }
+    #drop-zone strong { color: var(--accent-lt); }
+    #file-input { display: none; }
+
+    /* Selected file pill */
+    #file-pill {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-top: 14px;
+      font-size: 0.875rem;
+    }
+    #file-pill svg { flex-shrink: 0; color: var(--accent-lt); }
+    #file-pill span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #file-pill button {
+      background: none; border: none; cursor: pointer;
+      color: var(--muted); font-size: 1.1rem; line-height: 1;
+      padding: 2px 4px; border-radius: 4px;
+    }
+    #file-pill button:hover { color: var(--error); }
+
+    /* ── Form rows ────────────────────────────────────── */
+    .field { margin-top: 20px; }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; }
+
+    .input-row {
+      display: flex; gap: 8px;
+    }
+    input[type="text"], select {
+      flex: 1;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 0.9rem;
+      padding: 9px 12px;
+      outline: none;
+      transition: border-color .2s;
+    }
+    input[type="text"]:focus, select:focus { border-color: var(--accent); }
+
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+      border: none; border-radius: 8px; cursor: pointer;
+      font-size: 0.9rem; font-weight: 600; padding: 9px 16px;
+      transition: opacity .15s, transform .1s;
+    }
+    .btn:active { transform: scale(.97); }
+    .btn-accent  { background: var(--accent); color: #fff; }
+    .btn-accent:hover { opacity: .88; }
+    .btn-ghost   { background: var(--card); color: var(--text); border: 1px solid var(--border); }
+    .btn-ghost:hover { border-color: var(--accent); color: var(--accent-lt); }
+    .btn-lg {
+      width: 100%; padding: 13px; font-size: 1rem;
+      margin-top: 24px; border-radius: var(--radius);
+    }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+
+    /* ── Progress ─────────────────────────────────────── */
+    #progress-section { display: none; margin-top: 24px; }
+
+    .progress-bar-bg {
+      background: var(--card);
+      border-radius: 99px;
+      height: 8px;
+      overflow: hidden;
+      margin-bottom: 10px;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      border-radius: 99px;
+      background: linear-gradient(90deg, var(--accent), var(--accent-lt));
+      transition: width .4s ease;
+      width: 0%;
+    }
+    #status-msg { font-size: 0.875rem; color: var(--muted); }
+
+    /* ── Result ───────────────────────────────────────── */
+    #result-section {
+      display: none;
+      margin-top: 24px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+    #result-section.success { border-color: rgba(74, 222, 128, .35); }
+    #result-section.error   { border-color: rgba(248, 113, 113, .35); }
+
+    .result-title {
+      font-weight: 600; font-size: 1rem; margin-bottom: 4px;
+    }
+    .result-title.success { color: var(--success); }
+    .result-title.error   { color: var(--error); }
+    .result-sub { font-size: 0.85rem; color: var(--muted); margin-bottom: 16px; }
+
+    .result-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+    /* ── OCR select ───────────────────────────────────── */
+    select option { background: var(--card); }
+
+    /* ── Footer ───────────────────────────────────────── */
+    footer {
+      margin-top: 40px;
+      color: var(--muted);
+      font-size: 0.8rem;
+      text-align: center;
+    }
+    footer a { color: var(--accent-lt); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+
+    /* ── Features strip ──────────────────────────────── */
+    .features {
+      display: flex; gap: 12px; flex-wrap: wrap;
+      justify-content: center;
+      margin-bottom: 28px;
+      max-width: 600px;
+    }
+    .feat {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    .feat span { color: var(--accent-lt); margin-right: 5px; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>PDF2Word Pro</h1>
+    <p>Convert PDF to editable Word — fonts, tables &amp; images preserved</p>
+  </header>
+
+  <div class="features">
+    <div class="feat"><span>✓</span>Fonts &amp; colors</div>
+    <div class="feat"><span>✓</span>Tables</div>
+    <div class="feat"><span>✓</span>Images</div>
+    <div class="feat"><span>✓</span>OCR (scanned PDFs)</div>
+    <div class="feat"><span>✓</span>100% local</div>
+  </div>
+
+  <div class="card">
+
+    <!-- Drop zone -->
+    <div id="drop-zone" onclick="document.getElementById('file-input').click()">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+          d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414A1 1 0 0119 9.414V19a2 2 0 01-2 2z"/>
+      </svg>
+      <p><strong>Click or drag &amp; drop</strong> your PDF here<br>
+         <small>Max 100 MB · PDF files only</small></p>
+      <input type="file" id="file-input" accept=".pdf" />
+    </div>
+
+    <!-- Selected file pill -->
+    <div id="file-pill">
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+      </svg>
+      <span id="pill-name"></span>
+      <button onclick="clearFile()" title="Remove">✕</button>
+    </div>
+
+    <!-- Output folder -->
+    <div class="field">
+      <label for="folder-input">Save converted file to folder (local path on this machine)</label>
+      <div class="input-row">
+        <input type="text" id="folder-input" placeholder="e.g. C:\Users\ratna\Documents\Converted" />
+      </div>
+      <small style="color:var(--muted);font-size:0.78rem;display:block;margin-top:4px;">
+        Leave empty to download directly to your browser's Downloads folder.
+      </small>
+    </div>
+
+    <!-- OCR language -->
+    <div class="field">
+      <label for="ocr-lang">OCR Language (for scanned PDFs)</label>
+      <select id="ocr-lang">
+        <option value="eng">English</option>
+        <option value="fra">French</option>
+        <option value="deu">German</option>
+        <option value="spa">Spanish</option>
+        <option value="ita">Italian</option>
+        <option value="por">Portuguese</option>
+        <option value="hin">Hindi</option>
+        <option value="chi_sim">Chinese (Simplified)</option>
+      </select>
+    </div>
+
+    <!-- Convert button -->
+    <button class="btn btn-accent btn-lg" id="convert-btn" onclick="startConvert()" disabled>
+      Convert to Word
+    </button>
+
+    <!-- Progress -->
+    <div id="progress-section">
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="progress-fill"></div>
+      </div>
+      <div id="status-msg">Starting...</div>
+    </div>
+
+    <!-- Result -->
+    <div id="result-section">
+      <div class="result-title" id="result-title"></div>
+      <div class="result-sub"  id="result-sub"></div>
+      <div class="result-actions" id="result-actions"></div>
+    </div>
+
+  </div>
+
+  <footer>
+    <a href="https://github.com/ratnadipsinha/pdftoword" target="_blank">
+      View source on GitHub
+    </a>
+    &nbsp;·&nbsp; Running locally · your files never leave this machine
+  </footer>
+
+<script>
+  let selectedFile = null;
+  let currentJobId  = null;
+  let pollTimer     = null;
+
+  // ── File selection ──────────────────────────────────────────
+  const fileInput = document.getElementById('file-input');
+  const dropZone  = document.getElementById('drop-zone');
+
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files[0]) setFile(fileInput.files[0]);
+  });
+
+  dropZone.addEventListener('dragover', e => {
+    e.preventDefault(); dropZone.classList.add('dragover');
+  });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault(); dropZone.classList.remove('dragover');
+    const f = e.dataTransfer.files[0];
+    if (f && f.name.toLowerCase().endsWith('.pdf')) setFile(f);
+    else alert('Please drop a PDF file.');
+  });
+
+  function setFile(file) {
+    selectedFile = file;
+    document.getElementById('pill-name').textContent = file.name;
+    document.getElementById('file-pill').style.display = 'flex';
+    document.getElementById('convert-btn').disabled = false;
+    resetResult();
+  }
+
+  function clearFile() {
+    selectedFile = null;
+    fileInput.value = '';
+    document.getElementById('file-pill').style.display = 'none';
+    document.getElementById('convert-btn').disabled = true;
+    resetResult();
+  }
+
+  // ── Conversion ──────────────────────────────────────────────
+  async function startConvert() {
+    if (!selectedFile) return;
+    stopPolling();
+    resetResult();
+
+    const btn = document.getElementById('convert-btn');
+    btn.disabled = true;
+    btn.textContent = 'Uploading...';
+    showProgress(5, 'Uploading PDF...');
+
+    const form = new FormData();
+    form.append('file', selectedFile);
+    form.append('ocr_lang', document.getElementById('ocr-lang').value);
+
+    try {
+      const res  = await fetch('/convert', { method: 'POST', body: form });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || 'Upload failed');
+      currentJobId = data.job_id;
+      btn.textContent = 'Converting...';
+      pollStatus();
+    } catch (err) {
+      showError(err.message);
+      btn.disabled = false;
+      btn.textContent = 'Convert to Word';
+    }
+  }
+
+  // ── Polling ─────────────────────────────────────────────────
+  function pollStatus() {
+    pollTimer = setInterval(async () => {
+      try {
+        const res  = await fetch(`/status/${currentJobId}`);
+        const data = await res.json();
+
+        showProgress(data.progress || 0, data.message || '...');
+
+        if (data.status === 'done') {
+          stopPolling();
+          onDone();
+        } else if (data.status === 'error') {
+          stopPolling();
+          showError(data.message);
+          resetBtn();
+        }
+      } catch {
+        stopPolling();
+        showError('Lost connection to server.');
+        resetBtn();
+      }
+    }, 800);
+  }
+
+  function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  // ── Done ────────────────────────────────────────────────────
+  async function onDone() {
+    const folderPath = document.getElementById('folder-input').value.trim();
+    const section    = document.getElementById('result-section');
+    section.className = 'success';
+
+    if (folderPath) {
+      // Try to save directly to local folder (works when server=localhost)
+      try {
+        const res  = await fetch('/save-to-folder', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ job_id: currentJobId, folder_path: folderPath }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+
+        setResult('success', 'Saved!', `File saved to: ${data.saved_to}`, [
+          makeBtn('Convert another', 'ghost', clearFile),
+        ]);
+      } catch (err) {
+        // Folder save failed — fall back to browser download
+        setResult('success', 'Done! Downloading...', `Could not save to folder: ${err.message}. Downloading instead.`, [
+          makeBtn('Download .docx', 'accent', () => triggerDownload()),
+          makeBtn('Convert another', 'ghost', clearFile),
+        ]);
+        triggerDownload();
+      }
+    } else {
+      // No folder — browser download
+      setResult('success', 'Conversion complete!', 'Your Word file is ready.', [
+        makeBtn('Download .docx', 'accent', () => triggerDownload()),
+        makeBtn('Convert another', 'ghost', clearFile),
+      ]);
+      triggerDownload();
+    }
+
+    resetBtn();
+    showProgress(100, 'Complete');
+  }
+
+  function triggerDownload() {
+    if (!currentJobId) return;
+    const a = document.createElement('a');
+    a.href = `/download/${currentJobId}`;
+    a.click();
+  }
+
+  // ── UI helpers ──────────────────────────────────────────────
+  function showProgress(pct, msg) {
+    document.getElementById('progress-section').style.display = 'block';
+    document.getElementById('progress-fill').style.width = pct + '%';
+    document.getElementById('status-msg').textContent = msg;
+  }
+
+  function showError(msg) {
+    setResult('error', 'Conversion failed', msg, [
+      makeBtn('Try again', 'accent', () => location.reload()),
+    ]);
+    document.getElementById('progress-section').style.display = 'none';
+  }
+
+  function setResult(type, title, sub, actions) {
+    const s = document.getElementById('result-section');
+    s.style.display = 'block';
+    s.className = type;
+    document.getElementById('result-title').className = 'result-title ' + type;
+    document.getElementById('result-title').textContent = title;
+    document.getElementById('result-sub').textContent   = sub;
+    const acts = document.getElementById('result-actions');
+    acts.innerHTML = '';
+    actions.forEach(el => acts.appendChild(el));
+  }
+
+  function makeBtn(label, style, onClick) {
+    const b = document.createElement('button');
+    b.className = `btn btn-${style}`;
+    b.textContent = label;
+    b.onclick = onClick;
+    return b;
+  }
+
+  function resetResult() {
+    document.getElementById('result-section').style.display = 'none';
+    document.getElementById('progress-section').style.display = 'none';
+    currentJobId = null;
+  }
+
+  function resetBtn() {
+    const btn = document.getElementById('convert-btn');
+    btn.disabled = false;
+    btn.textContent = 'Convert to Word';
+  }
+</script>
+</body>
+</html>
