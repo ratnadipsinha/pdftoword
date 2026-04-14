@@ -2,7 +2,7 @@
 
 > Convert PDF files to editable Microsoft Word documents — with formatting preserved.
 
-[![Build & Release](https://github.com/ratnadipsinha/pdf2word-pro/actions/workflows/build-release.yml/badge.svg)](https://github.com/ratnadipsinha/pdf2word-pro/actions/workflows/build-release.yml)
+[![Build & Release](https://github.com/ratnadipsinha/pdftoword/actions/workflows/build-release.yml/badge.svg)](https://github.com/ratnadipsinha/pdftoword/actions/workflows/build-release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://python.org)
 
@@ -63,8 +63,8 @@
 
 ```bash
 # 1. Clone
-git clone https://github.com/ratnadipsinha/pdf2word-pro.git
-cd pdf2word-pro
+git clone https://github.com/ratnadipsinha/pdftoword.git
+cd pdftoword
 
 # 2. Install dependencies
 pip install -r requirements.txt
