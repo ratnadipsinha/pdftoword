@@ -11,9 +11,10 @@ import time
 from pathlib import Path
 from flask import (
     Flask, request, jsonify, send_file,
-    render_template, abort
+    render_template
 )
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import HTTPException
 from src.converter import PDF2WordConverter
 
 app = Flask(__name__)
@@ -21,7 +22,6 @@ app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100 MB upload limit
 
 # True when running on Render or any remote server.
 # Render automatically sets the RENDER env var on all its instances.
-# Also respects a manual IS_REMOTE=true override.
 IS_REMOTE = (
     os.environ.get("RENDER") is not None or
     os.environ.get("IS_REMOTE", "false").lower() == "true"
@@ -34,7 +34,7 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 # In-memory job store  {job_id: {"status", "progress", "message", "output_path", "filename"}}
-jobs: dict[str, dict] = {}
+jobs: dict = {}
 jobs_lock = threading.Lock()
 
 ALLOWED_EXT = {".pdf"}
@@ -42,6 +42,21 @@ ALLOWED_EXT = {".pdf"}
 
 def allowed_file(filename: str) -> bool:
     return Path(filename).suffix.lower() in ALLOWED_EXT
+
+
+# ── Global error handlers — always return JSON, never HTML ──────────────
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    if isinstance(e, HTTPException):
+        return jsonify(error=e.description), e.code
+    # Unexpected server error — log it and return clean JSON
+    app.logger.exception("Unhandled error")
+    return jsonify(error=f"Server error: {str(e)}"), 500
+
+@app.errorhandler(413)
+def too_large(e):
+    return jsonify(error="File too large — maximum upload size is 100 MB"), 413
 
 
 # ── Routes ──────────────────────────────────────────────────────────────
@@ -55,127 +70,144 @@ def index():
 def convert():
     """
     Accepts multipart/form-data:
-      - file        : PDF file
-      - output_name : desired output filename (optional)
-      - ocr_lang    : tesseract lang code (default: eng)
+      - file     : PDF file
+      - ocr_lang : tesseract lang code (default: eng)
     Returns JSON: { job_id }
     """
-    if "file" not in request.files:
-        return jsonify(error="No file uploaded"), 400
+    try:
+        if "file" not in request.files:
+            return jsonify(error="No file uploaded"), 400
 
-    f = request.files["file"]
-    if not f.filename or not allowed_file(f.filename):
-        return jsonify(error="Please upload a PDF file"), 400
+        f = request.files["file"]
+        if not f.filename or not allowed_file(f.filename):
+            return jsonify(error="Please upload a PDF file (.pdf)"), 400
 
-    ocr_lang = request.form.get("ocr_lang", "eng").strip() or "eng"
-    safe_name = secure_filename(f.filename)
-    job_id = uuid.uuid4().hex
+        ocr_lang = request.form.get("ocr_lang", "eng").strip() or "eng"
+        safe_name = secure_filename(f.filename)
+        if not safe_name:
+            safe_name = "upload.pdf"
 
-    # Save uploaded PDF
-    upload_path = UPLOAD_DIR / f"{job_id}_{safe_name}"
-    f.save(str(upload_path))
+        job_id = uuid.uuid4().hex
 
-    # Output filename
-    stem = Path(safe_name).stem
-    output_filename = f"{stem}.docx"
-    output_path = OUTPUT_DIR / f"{job_id}_{output_filename}"
+        # Save uploaded PDF
+        upload_path = UPLOAD_DIR / f"{job_id}_{safe_name}"
+        f.save(str(upload_path))
 
-    # Register job
-    with jobs_lock:
-        jobs[job_id] = {
-            "status": "queued",
-            "progress": 0,
-            "message": "Queued...",
-            "output_path": str(output_path),
-            "output_filename": output_filename,
-            "upload_path": str(upload_path),
-        }
+        # Output filename
+        stem = Path(safe_name).stem
+        output_filename = f"{stem}.docx"
+        output_path = OUTPUT_DIR / f"{job_id}_{output_filename}"
 
-    # Run conversion in background thread
-    thread = threading.Thread(
-        target=_run_job,
-        args=(job_id, str(upload_path), str(output_path), ocr_lang),
-        daemon=True,
-    )
-    thread.start()
+        # Register job
+        with jobs_lock:
+            jobs[job_id] = {
+                "status": "queued",
+                "progress": 0,
+                "message": "Queued...",
+                "output_path": str(output_path),
+                "output_filename": output_filename,
+                "upload_path": str(upload_path),
+            }
 
-    return jsonify(job_id=job_id)
+        # Run conversion in background thread
+        thread = threading.Thread(
+            target=_run_job,
+            args=(job_id, str(upload_path), str(output_path), ocr_lang),
+            daemon=True,
+        )
+        thread.start()
+
+        return jsonify(job_id=job_id)
+
+    except Exception as exc:
+        app.logger.exception("Error in /convert")
+        return jsonify(error=str(exc)), 500
 
 
 @app.route("/status/<job_id>")
 def status(job_id: str):
     """Poll job status. Returns JSON with status, progress (0-100), message."""
-    with jobs_lock:
-        job = jobs.get(job_id)
-    if not job:
-        return jsonify(error="Job not found"), 404
-    return jsonify(
-        status=job["status"],
-        progress=job["progress"],
-        message=job["message"],
-    )
+    try:
+        with jobs_lock:
+            job = jobs.get(job_id)
+        if not job:
+            return jsonify(error="Job not found"), 404
+        return jsonify(
+            status=job["status"],
+            progress=job["progress"],
+            message=job["message"],
+        )
+    except Exception as exc:
+        return jsonify(error=str(exc)), 500
 
 
 @app.route("/download/<job_id>")
 def download(job_id: str):
     """Stream the converted .docx to the browser for download."""
-    with jobs_lock:
-        job = jobs.get(job_id)
-    if not job or job["status"] != "done":
-        abort(404)
+    try:
+        with jobs_lock:
+            job = jobs.get(job_id)
 
-    output_path = job["output_path"]
-    output_filename = job["output_filename"]
+        if not job:
+            return jsonify(error="Job not found — it may have already been downloaded"), 404
+        if job["status"] != "done":
+            return jsonify(error="File not ready yet"), 400
 
-    if not os.path.isfile(output_path):
-        abort(404)
+        output_path = job["output_path"]
+        output_filename = job["output_filename"]
 
-    response = send_file(
-        output_path,
-        as_attachment=True,
-        download_name=output_filename,
-        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    )
+        if not os.path.isfile(output_path):
+            return jsonify(error="Output file missing — please convert again"), 404
 
-    # Schedule cleanup after response is sent
-    @response.call_on_close
-    def cleanup():
-        _cleanup_job(job_id)
+        response = send_file(
+            output_path,
+            as_attachment=True,
+            download_name=output_filename,
+            mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
 
-    return response
+        @response.call_on_close
+        def cleanup():
+            _cleanup_job(job_id)
+
+        return response
+
+    except Exception as exc:
+        app.logger.exception("Error in /download")
+        return jsonify(error=str(exc)), 500
 
 
 @app.route("/save-to-folder", methods=["POST"])
 def save_to_folder():
     """
     Save converted file to a local folder path on this machine.
-    Body JSON: { job_id, folder_path }
     Only works when server and browser are on the same machine (local run).
-    Returns 403 when IS_REMOTE is True.
     """
     if IS_REMOTE:
         return jsonify(error="Folder save is only available when running locally."), 403
 
-    data = request.get_json(force=True)
-    job_id = data.get("job_id", "")
-    folder_path = data.get("folder_path", "").strip()
-
-    with jobs_lock:
-        job = jobs.get(job_id)
-    if not job or job["status"] != "done":
-        return jsonify(error="Job not ready"), 404
-
-    if not folder_path:
-        return jsonify(error="No folder path provided"), 400
-
-    folder = Path(folder_path)
     try:
+        data = request.get_json(force=True)
+        job_id = data.get("job_id", "")
+        folder_path = data.get("folder_path", "").strip()
+
+        with jobs_lock:
+            job = jobs.get(job_id)
+        if not job or job["status"] != "done":
+            return jsonify(error="Job not ready"), 404
+
+        if not folder_path:
+            return jsonify(error="No folder path provided"), 400
+
+        folder = Path(folder_path)
         folder.mkdir(parents=True, exist_ok=True)
         dest = folder / job["output_filename"]
+
         import shutil
         shutil.copy2(job["output_path"], str(dest))
         _cleanup_job(job_id)
         return jsonify(saved_to=str(dest))
+
     except Exception as exc:
         return jsonify(error=str(exc)), 500
 
@@ -203,9 +235,8 @@ def _run_job(job_id: str, upload_path: str, output_path: str, ocr_lang: str):
             _update(0, f"Conversion failed: {result.error}", status="error")
 
     except Exception as exc:
-        _update(0, f"Error: {exc}", status="error")
+        _update(0, f"Server error during conversion: {str(exc)}", status="error")
     finally:
-        # Clean up the uploaded PDF
         try:
             os.remove(upload_path)
         except Exception:
@@ -238,7 +269,6 @@ def _periodic_cleanup(max_age_seconds: int = 3600):
                 pass
 
 
-# Start background cleaner
 threading.Thread(target=_periodic_cleanup, daemon=True).start()
 
 

@@ -353,6 +353,20 @@
     resetResult();
   }
 
+  // ── Safe fetch — always returns parsed JSON, never throws on HTML responses
+  async function safeFetch(url, options = {}) {
+    const res = await fetch(url, options);
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = await res.json();
+      return { ok: res.ok, status: res.status, data };
+    }
+    // Server returned HTML (e.g. a 500 error page) — extract text as error
+    const text = await res.text();
+    const errorMsg = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+    return { ok: false, status: res.status, data: { error: errorMsg || `Server error (${res.status})` } };
+  }
+
   // ── Conversion ──────────────────────────────────────────────
   async function startConvert() {
     if (!selectedFile) return;
@@ -369,9 +383,8 @@
     form.append('ocr_lang', document.getElementById('ocr-lang').value);
 
     try {
-      const res  = await fetch('/convert', { method: 'POST', body: form });
-      const data = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error || 'Upload failed');
+      const { ok, data } = await safeFetch('/convert', { method: 'POST', body: form });
+      if (!ok || data.error) throw new Error(data.error || 'Upload failed');
       currentJobId = data.job_id;
       btn.textContent = 'Converting...';
       pollStatus();
@@ -386,8 +399,14 @@
   function pollStatus() {
     pollTimer = setInterval(async () => {
       try {
-        const res  = await fetch(`/status/${currentJobId}`);
-        const data = await res.json();
+        const { ok, data } = await safeFetch(`/status/${currentJobId}`);
+
+        if (!ok) {
+          stopPolling();
+          showError(data.error || 'Server error while checking status.');
+          resetBtn();
+          return;
+        }
 
         showProgress(data.progress || 0, data.message || '...');
 
@@ -399,9 +418,9 @@
           showError(data.message);
           resetBtn();
         }
-      } catch {
+      } catch (err) {
         stopPolling();
-        showError('Lost connection to server.');
+        showError('Lost connection to server: ' + err.message);
         resetBtn();
       }
     }, 800);
@@ -413,26 +432,21 @@
 
   // ── Done ────────────────────────────────────────────────────
   async function onDone() {
-    const folderPath = document.getElementById('folder-input').value.trim();
-    const section    = document.getElementById('result-section');
-    section.className = 'success';
+    const folderInput = document.getElementById('folder-input');
+    const folderPath  = folderInput ? folderInput.value.trim() : '';
 
     if (folderPath) {
-      // Try to save directly to local folder (works when server=localhost)
       try {
-        const res  = await fetch('/save-to-folder', {
+        const { ok, data } = await safeFetch('/save-to-folder', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ job_id: currentJobId, folder_path: folderPath }),
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error);
-
+        if (!ok) throw new Error(data.error);
         setResult('success', 'Saved!', `File saved to: ${data.saved_to}`, [
           makeBtn('Convert another', 'ghost', clearFile),
         ]);
       } catch (err) {
-        // Folder save failed — fall back to browser download
         setResult('success', 'Done! Downloading...', `Could not save to folder: ${err.message}. Downloading instead.`, [
           makeBtn('Download .docx', 'accent', () => triggerDownload()),
           makeBtn('Convert another', 'ghost', clearFile),
@@ -440,7 +454,6 @@
         triggerDownload();
       }
     } else {
-      // No folder — browser download
       setResult('success', 'Conversion complete!', 'Your Word file is ready.', [
         makeBtn('Download .docx', 'accent', () => triggerDownload()),
         makeBtn('Convert another', 'ghost', clearFile),
