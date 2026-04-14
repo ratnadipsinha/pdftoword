@@ -19,8 +19,13 @@ from src.converter import PDF2WordConverter
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100 MB upload limit
 
-# True when deployed to a remote server (set via env var in render.yaml)
-IS_REMOTE = os.environ.get("IS_REMOTE", "false").lower() == "true"
+# True when running on Render or any remote server.
+# Render automatically sets the RENDER env var on all its instances.
+# Also respects a manual IS_REMOTE=true override.
+IS_REMOTE = (
+    os.environ.get("RENDER") is not None or
+    os.environ.get("IS_REMOTE", "false").lower() == "true"
+)
 
 # Temp working directories (auto-cleaned after download)
 UPLOAD_DIR = Path("_uploads")

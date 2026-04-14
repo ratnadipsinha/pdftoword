@@ -8,7 +8,13 @@
 
 ---
 
-## Run in 3 commands
+## Live Demo
+
+**[pdftoword-6-xc09.onrender.com](https://pdftoword-6-xc09.onrender.com)** — open in any browser, no install needed.
+
+---
+
+## Run locally in 3 commands
 
 ```bash
 git clone https://github.com/ratnadipsinha/pdftoword.git
