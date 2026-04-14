@@ -239,10 +239,6 @@ class WordBuilder:
     def _add_page_break(self):
         para = self.doc.add_paragraph()
         run = para.add_run()
-        run.add_break(WD_ALIGN_PARAGRAPH.CENTER.__class__.__mro__[0])  # noqa
-        # Proper page break via XML
-        from docx.oxml.ns import qn
-        from docx.oxml import OxmlElement
         br = OxmlElement("w:br")
         br.set(qn("w:type"), "page")
         run._r.append(br)
