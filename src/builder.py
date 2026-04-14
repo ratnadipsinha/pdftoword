@@ -5,10 +5,8 @@ Handles OCR for scanned pages.
 """
 
 import io
-import os
-import tempfile
 from docx import Document
-from docx.shared import Pt, RGBColor, Inches, Emu
+from docx.shared import Pt, RGBColor, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
@@ -24,26 +22,20 @@ except ImportError:
 
 
 ALIGN_MAP = {
-    "left": WD_ALIGN_PARAGRAPH.LEFT,
-    "center": WD_ALIGN_PARAGRAPH.CENTER,
-    "right": WD_ALIGN_PARAGRAPH.RIGHT,
+    "left":    WD_ALIGN_PARAGRAPH.LEFT,
+    "center":  WD_ALIGN_PARAGRAPH.CENTER,
+    "right":   WD_ALIGN_PARAGRAPH.RIGHT,
     "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
 }
+
+# Vertical gap (points) below which two spans are treated as the same paragraph
+SAME_LINE_THRESHOLD = 4.0
 
 
 class WordBuilder:
     """Builds a .docx document from a list of PageData objects."""
 
-    # Font size thresholds for heading detection
-    HEADING_SIZES = {
-        24: 1,   # H1
-        20: 1,
-        18: 2,   # H2
-        16: 2,
-        14: 3,   # H3
-    }
-
-    def __init__(self, pages: list[PageData], ocr_lang: str = "eng"):
+    def __init__(self, pages: list, ocr_lang: str = "eng"):
         self.pages = pages
         self.ocr_lang = ocr_lang
         self.doc = Document()
@@ -63,7 +55,8 @@ class WordBuilder:
             else:
                 self._handle_text_page(page)
 
-            # Add page break between pages (except last)
+            # Page break between pages (except last) — attached to last
+            # paragraph so no extra blank paragraph is inserted
             if page.page_num < len(self.pages) - 1:
                 self._add_page_break()
 
@@ -74,10 +67,13 @@ class WordBuilder:
     # ------------------------------------------------------------------
 
     def _handle_text_page(self, page: PageData):
-        """Process a text-based page: text blocks, tables, images."""
-        # Sort all elements by vertical position (top to bottom)
+        """Process a text-based page: merge same-line spans, then render."""
+        # Merge text blocks that share the same line into one paragraph
+        merged_blocks = self._merge_same_line_blocks(page.text_blocks)
+
+        # Collect all elements sorted top-to-bottom
         elements = []
-        for tb in page.text_blocks:
+        for tb in merged_blocks:
             elements.append(("text", tb.y0, tb))
         for table in page.tables:
             elements.append(("table", table.y0, table))
@@ -99,7 +95,7 @@ class WordBuilder:
         if not page.images:
             return
 
-        img_block = page.images[0]  # Full-page render
+        img_block = page.images[0]
 
         if OCR_AVAILABLE:
             try:
@@ -108,19 +104,71 @@ class WordBuilder:
                 if ocr_text.strip():
                     para = self.doc.add_paragraph(ocr_text.strip())
                     para.style = self.doc.styles["Normal"]
+                    self._zero_spacing(para)
                     return
             except Exception:
-                pass  # Fall through to image embed
+                pass
 
-        # If OCR failed or not available — embed image
         self._add_image(img_block)
+
+    # ------------------------------------------------------------------
+    # Same-line merging
+    # ------------------------------------------------------------------
+
+    def _merge_same_line_blocks(self, blocks: list) -> list:
+        """
+        Group spans whose top edges are within SAME_LINE_THRESHOLD of each
+        other into a single TextBlock (joined by a space). This prevents
+        every word on a line becoming its own paragraph.
+        """
+        if not blocks:
+            return blocks
+
+        # Sort by top-y first, then left-x
+        sorted_blocks = sorted(blocks, key=lambda b: (round(b.y0), b.x0))
+        groups = []
+        current_group = [sorted_blocks[0]]
+
+        for block in sorted_blocks[1:]:
+            prev = current_group[-1]
+            # Same line if y0 values are close
+            if abs(block.y0 - prev.y0) <= SAME_LINE_THRESHOLD:
+                current_group.append(block)
+            else:
+                groups.append(current_group)
+                current_group = [block]
+        groups.append(current_group)
+
+        merged = []
+        for group in groups:
+            if len(group) == 1:
+                merged.append(group[0])
+                continue
+            # Use the properties of the first (leftmost) span for the merged block
+            lead = group[0]
+            combined_text = " ".join(b.text for b in group if b.text)
+            new_block = TextBlock(
+                text=combined_text,
+                x0=lead.x0, y0=lead.y0,
+                x1=group[-1].x1, y1=max(b.y1 for b in group),
+                font_name=lead.font_name,
+                font_size=lead.font_size,
+                bold=lead.bold,
+                italic=lead.italic,
+                color=lead.color,
+                align=lead.align,
+                page_num=lead.page_num,
+            )
+            merged.append(new_block)
+
+        return merged
 
     # ------------------------------------------------------------------
     # Text block rendering
     # ------------------------------------------------------------------
 
     def _add_text_block(self, tb: TextBlock):
-        """Add a styled paragraph for a text span."""
+        """Add a styled paragraph for a text span — no extra spacing."""
         heading_level = self._detect_heading(tb)
 
         if heading_level:
@@ -128,6 +176,9 @@ class WordBuilder:
         else:
             para = self.doc.add_paragraph()
             para.style = self.doc.styles["Normal"]
+
+        # ── Kill all spacing around the paragraph ──────────────────────
+        self._zero_spacing(para)
 
         para.alignment = ALIGN_MAP.get(tb.align, WD_ALIGN_PARAGRAPH.LEFT)
 
@@ -141,8 +192,8 @@ class WordBuilder:
         if (r, g, b) != (0, 0, 0):
             run.font.color.rgb = RGBColor(r, g, b)
 
-    def _detect_heading(self, tb: TextBlock) -> int | None:
-        """Return heading level if text looks like a heading, else None."""
+    def _detect_heading(self, tb: TextBlock):
+        """Return heading level (int) if text looks like a heading, else None."""
         if tb.font_size >= 24 and tb.bold:
             return 1
         if tb.font_size >= 18 and tb.bold:
@@ -158,7 +209,7 @@ class WordBuilder:
     # ------------------------------------------------------------------
 
     def _add_table(self, table_block: TableBlock):
-        """Render a TableBlock as a Word table."""
+        """Render a TableBlock as a Word table — no trailing blank paragraph."""
         rows = table_block.rows
         if not rows:
             return
@@ -176,85 +227,100 @@ class WordBuilder:
                     break
                 cell = word_table.cell(r_idx, c_idx)
                 cell.text = cell_text or ""
-
-                # Style the cell text
                 for para in cell.paragraphs:
+                    self._zero_spacing(para)
                     for run in para.runs:
                         run.font.size = Pt(10)
 
-        self.doc.add_paragraph()  # Space after table
+        # No self.doc.add_paragraph() here — that was adding the blank gap
 
     # ------------------------------------------------------------------
     # Image rendering
     # ------------------------------------------------------------------
 
     def _add_image(self, img_block: ImageBlock):
-        """Embed an image in the document."""
+        """Embed an image — no extra spacing paragraph."""
         try:
             img_stream = io.BytesIO(img_block.image_bytes)
 
-            # Convert width/height from points to inches (1 pt = 1/72 inch)
-            width_in = img_block.width_pt / 72.0
+            width_in  = img_block.width_pt  / 72.0
             height_in = img_block.height_pt / 72.0
 
-            # Cap to page width (6.5 inches for standard margins)
             max_width = 6.5
             if width_in > max_width:
-                scale = max_width / width_in
-                width_in = max_width
+                scale     = max_width / width_in
+                width_in  = max_width
                 height_in *= scale
 
             para = self.doc.add_paragraph()
+            self._zero_spacing(para)
             para.alignment = WD_ALIGN_PARAGRAPH.CENTER
             run = para.add_run()
             run.add_picture(img_stream, width=Inches(width_in))
         except Exception:
-            pass  # Skip unembeddable images
+            pass
 
     # ------------------------------------------------------------------
-    # Setup helpers
+    # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _zero_spacing(para):
+        """Remove space_before and space_after from a paragraph."""
+        fmt = para.paragraph_format
+        fmt.space_before = Pt(0)
+        fmt.space_after  = Pt(0)
 
     def _setup_default_styles(self):
-        """Set global document defaults."""
+        """Set global document defaults — zero spacing, standard font."""
         style = self.doc.styles["Normal"]
-        font = style.font
-        font.name = "Arial"
-        font.size = Pt(11)
+        style.font.name = "Arial"
+        style.font.size = Pt(11)
 
-        # Narrow margins for better fidelity
+        # Zero out paragraph spacing on Normal style globally
+        fmt = style.paragraph_format
+        fmt.space_before = Pt(0)
+        fmt.space_after  = Pt(0)
+
         section = self.doc.sections[0]
-        section.left_margin = Inches(1.0)
-        section.right_margin = Inches(1.0)
-        section.top_margin = Inches(1.0)
+        section.left_margin   = Inches(1.0)
+        section.right_margin  = Inches(1.0)
+        section.top_margin    = Inches(1.0)
         section.bottom_margin = Inches(1.0)
 
     def _clear_default_paragraph(self):
-        """Remove the blank paragraph that python-docx adds by default."""
+        """Remove the blank paragraph python-docx inserts by default."""
         for para in self.doc.paragraphs:
             if para.text == "":
                 p = para._element
                 p.getparent().remove(p)
 
     def _add_page_break(self):
-        para = self.doc.add_paragraph()
-        run = para.add_run()
+        """Attach a page break to the last paragraph — no extra blank line."""
+        paras = self.doc.paragraphs
+        if paras:
+            # Re-use last paragraph's last run to carry the page break
+            last_para = paras[-1]
+            run = last_para.add_run()
+        else:
+            last_para = self.doc.add_paragraph()
+            run = last_para.add_run()
+
         br = OxmlElement("w:br")
         br.set(qn("w:type"), "page")
         run._r.append(br)
 
     @staticmethod
     def _safe_font(font_name: str) -> str:
-        """Map PDF font names to safe Word-compatible fonts."""
-        name_lower = font_name.lower()
-        if "times" in name_lower or "serif" in name_lower:
-            return "Times New Roman"
-        if "courier" in name_lower or "mono" in name_lower:
-            return "Courier New"
-        if "arial" in name_lower or "helvetica" in name_lower or "sans" in name_lower:
-            return "Arial"
-        if "calibri" in name_lower:
-            return "Calibri"
-        if "georgia" in name_lower:
-            return "Georgia"
-        return "Arial"  # Default fallback
+        """Map PDF font names to Word-safe fonts."""
+        n = font_name.lower()
+        if "times"    in n or "serif"     in n: return "Times New Roman"
+        if "courier"  in n or "mono"      in n: return "Courier New"
+        if "arial"    in n or "helvetica" in n or "sans" in n: return "Arial"
+        if "calibri"  in n: return "Calibri"
+        if "georgia"  in n: return "Georgia"
+        return "Arial"
+
+
+# Re-export so analyzer imports still work
+from .analyzer import TextBlock  # noqa: E402, F401
